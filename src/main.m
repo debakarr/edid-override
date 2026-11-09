@@ -5,8 +5,8 @@
 //  The override is volatile: it survives until the display is reset/reconnected,
 //  so `watch` re-applies it when the display comes back.
 //
-//  This is a clean-room replacement for the runtime part of BetterDisplay's
-//  custom-EDID feature. It does not modify or bypass BetterDisplay.
+//  Independent implementation of the private-API custom-EDID approach.
+//  It does not modify or bypass any other application.
 //
 
 #import <Foundation/Foundation.h>
@@ -28,7 +28,8 @@ static NSString *const kToolName = @"edid-override";
 static NSString *const kToolVersion = @"1.0.0";
 static NSString *const kAgentLabel = @"local.edid-override";
 
-// UW 2560x1080, vendor DNS (0x11d3), product 0x0a80, DTD 2560x1080@59.98.
+// Example EDID: UW 2560x1080, vendor DNS (0x11d3), product 0x0a80,
+// DTD 2560x1080@59.98. Replace it for a different display.
 static NSString *const kDefaultEDIDBase64 =
     @"AP///////wAR04AKAQAAAAEiAQSlQxx4Bu6Ro1RMmSYPUFQhCACBwNHAAQEBAQEBAQEBAQEBzUYAoKA4H0AwIDoAoRwhAAAaAjqAGHE4LUBYLEUAoRwhAAAeAAAA/QAwSx6gFAAKICAgICAgAAAA/ABVVyAyNTYweDEwODAKAKM=";
 
@@ -947,7 +948,7 @@ static void PrintUsage(FILE *stream) {
         "  edid-info                   Parse and print the built-in or supplied EDID\n"
         "\n"
         "Options:\n"
-        "  --edid <base64|hex|path>    EDID to apply (default: built-in UW 2560x1080)\n"
+        "  --edid <base64|hex|path>    EDID to apply (default: built-in example)\n"
         "  --edid-file <path>          Read EDID from a file (base64, hex, or raw)\n"
         "  --location <name>           DCPAVServiceProxy location (default: External)\n"
         "  --display-id <id>           CGDirectDisplayID (default: match EDID vendor/product)\n"

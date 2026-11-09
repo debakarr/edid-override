@@ -1,17 +1,32 @@
 # edid-override
 
-A small, self-contained replacement for BetterDisplay's **custom EDID** feature on
-Apple Silicon.
+Apply a custom EDID to an external display on macOS, without a privileged
+helper or a `/Library/Displays` override.
 
-It applies a 128-byte EDID directly to the display's `DCPAVServiceProxy` through
-the private `IOAVServiceSetVirtualEDIDMode` API, then selects the resulting mode
-with CoreGraphics. No privileged helper and no `/Library/Displays` override is
-required.
+`edid-override` talks to the display's `DCPAVServiceProxy` through the private
+`IOAVServiceSetVirtualEDIDMode` API, then selects the resulting mode with
+CoreGraphics. It is useful when a KVM, dock, or adapter does not pass the
+monitor's EDID and macOS falls back to a lower resolution.
 
-This exists because a KVM in front of the monitor does not return an EDID, so
-macOS only sees 1920x1080 instead of the monitor's 2560x1080 mode. The built-in
-EDID in this repo is for the author's **UW 2560x1080** (vendor `DNS` / `0x11d3`,
-product `0x0a80`, DTD 2560x1080@59.98).
+> This is an independent project. It is not affiliated with Apple or
+> BetterDisplay. The private API used here is undocumented and may change or be
+> removed in a future macOS release.
+
+## Why
+
+Some KVMs, docking stations, and adapters do not forward the display's EDID.
+macOS then sees a generic display and offers only fallback modes — for example
+1920x1080 instead of 2560x1080. Injecting the EDID at runtime restores the modes
+the panel actually supports.
+
+The override is volatile. It is lost when the display is unplugged, the KVM
+switches away, or the machine wakes. `watch` re-applies it automatically.
+
+## Requirements
+
+- macOS on Apple Silicon (tested on macOS 27)
+- Xcode Command Line Tools (clang + SDK)
+- An external display that macOS can see
 
 ## Build
 
@@ -19,32 +34,35 @@ product `0x0a80`, DTD 2560x1080@59.98).
 make
 ```
 
-Requires macOS with the Command Line Tools (clang + SDK). The binary is
-`./edid-override`.
+The binary is `./edid-override`. To install it into `~/.local/bin`:
+
+```sh
+make install
+```
 
 ## Quick start
 
-Inspect what macOS currently sees (read-only):
+Inspect the current display and mode list (read-only):
 
 ```sh
 ./edid-override list
-./edid-override status --all-modes
+./edid-override list --all-modes
 ./edid-override edid-info
 ```
 
-Preview the apply without touching the display:
+Preview an apply without touching the display:
 
 ```sh
 ./edid-override apply --dry-run
 ```
 
-Apply the EDID and select 2560x1080 @ 60 Hz, HiDPI off:
+Apply the example EDID and select 2560x1080 @ 60 Hz, HiDPI off:
 
 ```sh
-./edid-override apply
+./edid-override apply --edid-file edids/uw-2560x1080.b64
 ```
 
-The apply causes the display to renegotiate; expect a brief flicker or blank.
+The display renegotiates, so expect a brief flicker or blank screen.
 
 Reset back to the factory EDID:
 
@@ -52,7 +70,8 @@ Reset back to the factory EDID:
 ./edid-override reset
 ```
 
-Keep it applied after display reconnects, KVM switches, sleep/wake, and login:
+Keep the EDID applied across display reconnects, KVM switches, sleep/wake, and
+login:
 
 ```sh
 ./edid-override watch
@@ -68,47 +87,84 @@ Remove it:
 
 ```sh
 ./edid-override uninstall-agent
-# also delete the copied binary/EDID:
+# also delete the copied binary and EDID:
 ./edid-override uninstall-agent --purge
 ```
 
-Logs for the agent go to `~/Library/Logs/edid-override.log`.
+Agent logs are written to `~/Library/Logs/edid-override.log`.
 
-## Why the override is volatile
+## Using your own EDID
 
-`IOAVServiceSetVirtualEDIDMode` injects the EDID into the live display service.
-It is not persisted. When the display is unplugged, the KVM switches away, or
-the machine wakes, macOS may re-read the KVM's (missing) EDID and fall back to
-1920x1080. `watch` polls for that condition and re-applies the EDID; it also
-listens for CoreGraphics display reconfiguration and system wake notifications.
+The repository ships an example EDID for a UW 2560x1080 panel
+(vendor `DNS` / `0x11d3`, product `0x0a80`, DTD 2560x1080@59.98). Do not apply
+it to a different display.
 
-`install-agent` copies the binary and EDID to
-`~/Library/Application Support/EDIDOverride/` and installs
-`~/Library/LaunchAgents/local.edid-override.plist`, so the watcher keeps working
-even if the repo is moved.
+Pass your own EDID as a raw binary, base64, or hex file:
 
-If BetterDisplay is still installed, quit it (or disable its custom EDID and
-auto-apply settings) before relying on this tool. Two programs trying to own the
-same display EDID will fight each other.
+```sh
+./edid-override apply --edid-file /path/to/your-display.edid
+./edid-override apply --edid-file /path/to/your-display.b64
+```
+
+You can also pass base64 or hex directly:
+
+```sh
+./edid-override apply --edid "AP///////w..."
+```
+
+Validate an EDID before applying it:
+
+```sh
+./edid-override edid-info --edid-file /path/to/your-display.edid
+```
+
+The tool accepts 128-byte EDID blocks (and 256-byte extensions) and checks the
+header and checksums.
 
 ## How it works
 
 1. Find the external `DCPAVServiceProxy` in the IORegistry.
-2. `IOAVServiceCreateWithService()` on that node.
-3. `IOAVServiceSetVirtualEDIDMode(service, &mode, edid)` with `mode = 1` and the
-   128-byte EDID as `CFData`.
-4. Wait for the new mode to appear, then `CGDisplaySetDisplayMode()` to select
-   2560x1080 @ 60 Hz with HiDPI off.
+2. Create an `IOAVService` for that node with `IOAVServiceCreateWithService()`.
+3. Call `IOAVServiceSetVirtualEDIDMode(service, &mode, edid)` with `mode = 1`
+   and the EDID as `CFData`.
+4. Wait for the new mode to appear, then select it with
+   `CGDisplaySetDisplayMode()`.
 5. Reset uses `IOAVServiceSetVirtualEDIDMode(service, NULL, NULL)`.
 
-The same call sequence was recovered from BetterDisplay 5.2.1 (build 54014):
-the apply call site passes a pointer to `uint32_t 1` plus a `CFDataRef`, and the
-reset call site passes `NULL, NULL`.
+The same private call sequence is used by other custom-EDID tools. This project
+contains an independent implementation and does not modify or bypass any other
+application.
+
+## Auto-apply
+
+`watch` does three things:
+
+- checks the external display every few seconds;
+- listens for CoreGraphics display reconfiguration and system wake;
+- re-applies the EDID and target mode when the mode disappears.
+
+`install-agent` copies the binary and EDID to
+`~/Library/Application Support/EDIDOverride/` and installs
+`~/Library/LaunchAgents/local.edid-override.plist`. The agent runs as your user
+and starts at login.
+
+Do not run another custom-EDID tool at the same time. Two programs trying to own
+the same display EDID can fight each other.
+
+Check the agent:
+
+```sh
+launchctl print gui/$(id -u)/local.edid-override
+tail -f ~/Library/Logs/edid-override.log
+```
+
+After rebuilding, rerun `./edid-override install-agent` so the installed copy is
+updated.
 
 ## Options
 
 ```
---edid <base64|hex|path>    EDID to apply (default: built-in UW 2560x1080)
+--edid <base64|hex|path>    EDID to apply (default: built-in example)
 --edid-file <path>          Read EDID from a file (base64, hex, or raw)
 --location <name>           DCPAVServiceProxy location (default: External)
 --display-id <id>           CGDirectDisplayID (default: match EDID vendor/product)
@@ -125,26 +181,21 @@ reset call site passes `NULL, NULL`.
 Examples:
 
 ```sh
-# Use a different EDID file
-./edid-override apply --edid-file edids/uw-2560x1080.b64
-
 # Target a specific CG display
 ./edid-override apply --display-id 3
 
-# Apply only; leave the current mode alone
+# Apply the EDID but leave the current mode alone
 ./edid-override apply --no-mode
 
-# Watch a different mode
-./edid-override watch --width 2560 --height 1080 --refresh 59.98
+# Watch a 59.98 Hz mode
+./edid-override watch --refresh 59.98
 ```
 
 ## Legacy `/Library/Displays` plist
 
-`legacy-plist` generates the old-style override plist. On Apple Silicon this
-file is generally ignored by the display stack (which is why the existing
-BetterDisplay plist in `/Library/Displays/Contents/Resources/Overrides/` does not
-produce 2560x1080 modes on this machine). It is included only as a fallback for
-Intel Macs or older macOS versions.
+`legacy-plist` generates the old-style display override plist. On Apple Silicon
+this file is generally ignored by the display stack, so it is included only as a
+fallback for Intel Macs or older macOS versions.
 
 ```sh
 ./edid-override legacy-plist --vendor 0 --product 0 --out /tmp/DisplayProductID-0
@@ -152,25 +203,56 @@ Intel Macs or older macOS versions.
 
 Writing it into `/Library/Displays` requires root and is not done automatically.
 
+## Troubleshooting
+
+**`no External DCPAVServiceProxy found`**
+
+The external display is not connected or the KVM is switched away. Connect it
+and run `./edid-override list` again.
+
+**`IOAVServiceSetVirtualEDIDMode failed: 0x...`**
+
+The private API may not be available on this macOS version, or the service is in
+an unexpected state. Reconnect the display and try `./edid-override reset`
+first.
+
+**EDID applies but the mode does not appear**
+
+Run `./edid-override edid-info --edid-file <file>` to check the EDID. Confirm the
+requested width, height, and refresh rate with `./edid-override list
+--all-modes`. Some EDIDs expose 59.98 Hz rather than 60.00 Hz; the default
+tolerance accepts both.
+
+**The agent is not running**
+
+```sh
+launchctl print gui/$(id -u)/local.edid-override
+tail -50 ~/Library/Logs/edid-override.log
+```
+
+Reinstall with `./edid-override install-agent` if the plist or copied binary is
+missing.
+
 ## Safety
 
 - Applying an EDID renegotiates the display. Save your work and expect a
   flicker.
-- If the display ends up in a bad state, run `./edid-override reset`, unplug and
-  replug the display, or reboot.
+- A wrong EDID can leave a display in an unusable mode. If that happens, run
+  `./edid-override reset`, unplug and replug the display, or reboot.
 - The tool only touches the external `DCPAVServiceProxy` by default. It does not
-  modify BetterDisplay, its preferences, or any system files.
+  modify any application, its preferences, or system files.
 - No sudo, SIP change, or code-signing entitlement is needed for the runtime
   EDID injection.
+- Use this at your own risk. There is no warranty.
 
 ## Layout
 
 ```
 src/main.m                 CLI, EDID parsing, IOAVService calls, watcher
-edids/uw-2560x1080.b64     The 128-byte EDID (base64)
+edids/uw-2560x1080.b64     Example 128-byte EDID (base64)
 Makefile                   Build
 ```
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
