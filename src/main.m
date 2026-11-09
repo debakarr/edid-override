@@ -37,6 +37,10 @@ static const uint32_t kDefaultHeight = 1080;
 static const double kDefaultRefresh = 60.0;
 static const double kRefreshTolerance = 2.0;
 
+// Defined later.
+static NSString *AgentPlistPath(void);
+static int RunTool(NSString *path, NSArray<NSString *> *arguments, NSString **output);
+
 #pragma mark - Errors and logging
 
 static NSError *MakeError(NSString *format, ...) {
@@ -1033,6 +1037,19 @@ static int CommandList(Options *options) {
             }
             if (modes) CFRelease(modes);
         }
+    }
+
+    printf("\nAuto-apply agent:\n");
+    NSString *agentPlist = AgentPlistPath();
+    if (![[NSFileManager defaultManager] fileExistsAtPath:agentPlist]) {
+        printf("  not installed (run `%s install-agent`)\n", kToolName.UTF8String);
+    } else {
+        int status = RunTool(@"/bin/launchctl",
+                             @[@"print",
+                               [NSString stringWithFormat:@"gui/%u/%@", getuid(), kAgentLabel]],
+                             NULL);
+        printf("  %s: %s\n", CString(agentPlist),
+               status == 0 ? "installed and loaded" : "installed but not loaded");
     }
     return 0;
 }
