@@ -1,0 +1,4 @@
+edid-override
+.DS_Store
+*.o
+build/
