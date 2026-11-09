@@ -665,7 +665,7 @@ static void DisplayReconfigurationCallback(CGDirectDisplayID display,
                                     self.hiDPI, kRefreshTolerance);
 
     if (available != self.lastModeAvailable) {
-        LogMessage(@"%ux%u@%.2f mode %@ on display %u (%@)",
+        LogMessage(@"%ux%u@%.2f mode %@ on display %u (%s)",
                    self.width, self.height, self.refresh,
                    available ? @"available" : @"missing",
                    displayID, CString(DisplayName(displayID)));
@@ -1114,7 +1114,22 @@ static int CommandReset(Options *options) {
 
     printf("virtual EDID reset requested on %s service (registry=0x%llx)\n",
            CString(service.location), (unsigned long long)service.registryID);
-    sleep(1);
+
+    // Give the display a moment to renegotiate before printing the new state.
+    for (int attempt = 0; attempt < 20; attempt++) {
+        BOOL stillAtTarget = NO;
+        for (NSNumber *number in OnlineDisplayIDs()) {
+            CGDirectDisplayID displayID = number.unsignedIntValue;
+            if (CGDisplayIsBuiltin(displayID)) continue;
+            if (DisplayIsAtMode(displayID, options.width, options.height,
+                                options.refresh, options.hiDPI, kRefreshTolerance)) {
+                stillAtTarget = YES;
+                break;
+            }
+        }
+        if (!stillAtTarget) break;
+        usleep(250000);
+    }
 
     NSArray<NSNumber *> *ids = OnlineDisplayIDs();
     for (NSNumber *number in ids) {
@@ -1237,6 +1252,17 @@ static NSString *ResolvedExecutablePath(void) {
     return [path stringByResolvingSymlinksInPath];
 }
 
+static void BootoutAgent(NSString *uid, NSString *plistPath) {
+    RunTool(@"/bin/launchctl",
+            @[@"bootout", [NSString stringWithFormat:@"gui/%@/%@", uid, kAgentLabel]],
+            NULL);
+    if (plistPath && [[NSFileManager defaultManager] fileExistsAtPath:plistPath]) {
+        RunTool(@"/bin/launchctl",
+                @[@"bootout", [NSString stringWithFormat:@"gui/%@", uid], plistPath],
+                NULL);
+    }
+}
+
 static int CommandInstallAgent(Options *options) {
     NSError *error = nil;
     NSData *edid = LoadEDID(options.edidArgument, &error);
@@ -1338,9 +1364,7 @@ static int CommandInstallAgent(Options *options) {
     }
 
     NSString *uid = [NSString stringWithFormat:@"%u", getuid()];
-    RunTool(@"/bin/launchctl",
-            @[@"bootout", [NSString stringWithFormat:@"gui/%@/%@", uid, kAgentLabel]],
-            NULL);
+    BootoutAgent(uid, plistPath);
 
     NSString *launchctlOutput = nil;
     int status = RunTool(@"/bin/launchctl",
@@ -1364,12 +1388,10 @@ static int CommandInstallAgent(Options *options) {
 
 static int CommandUninstallAgent(Options *options) {
     NSString *uid = [NSString stringWithFormat:@"%u", getuid()];
-    RunTool(@"/bin/launchctl",
-            @[@"bootout", [NSString stringWithFormat:@"gui/%@/%@", uid, kAgentLabel]],
-            NULL);
-
     NSFileManager *fileManager = [NSFileManager defaultManager];
     NSString *plistPath = AgentPlistPath();
+    BootoutAgent(uid, plistPath);
+
     NSError *error = nil;
     if ([fileManager fileExistsAtPath:plistPath]) {
         if (![fileManager removeItemAtPath:plistPath error:&error]) {

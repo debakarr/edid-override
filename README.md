@@ -29,6 +29,7 @@ Inspect what macOS currently sees (read-only):
 ```sh
 ./edid-override list
 ./edid-override status --all-modes
+./edid-override edid-info
 ```
 
 Preview the apply without touching the display:
@@ -85,6 +86,10 @@ listens for CoreGraphics display reconfiguration and system wake notifications.
 `~/Library/Application Support/EDIDOverride/` and installs
 `~/Library/LaunchAgents/local.edid-override.plist`, so the watcher keeps working
 even if the repo is moved.
+
+If BetterDisplay is still installed, quit it (or disable its custom EDID and
+auto-apply settings) before relying on this tool. Two programs trying to own the
+same display EDID will fight each other.
 
 ## How it works
 
